@@ -7,6 +7,7 @@ import pb.Endpoint;
 import pb.EndpointUnavailable;
 import pb.Manager;
 import pb.Utils;
+import pb.protocols.ICallback;
 import pb.protocols.Message;
 import pb.protocols.Protocol;
 import pb.protocols.IRequestReplyProtocol;
@@ -27,25 +28,65 @@ import pb.protocols.IRequestReplyProtocol;
  * should send the KeepAlive request immediately, whereas the server will wait
  * up to 20 seconds before it assumes the client is dead. The protocol stops
  * when a timeout occurs.
- * 
+ *
  * @see {@link pb.Manager}
  * @see {@link pb.Endpoint}
  * @see {@link pb.protocols.Message}
  * @see {@link pb.protocols.keepalive.KeepAliveRequest}
- * @see {@link pb.protocols.keepalive.KeepaliveRespopnse}
+ * @see {@link pb.protocols.keepalive.KeepAliveReply}
  * @see {@link pb.protocols.Protocol}
- * @see {@link pb.protocols.IRequestReqplyProtocol}
+ * @see {@link pb.protocols.IRequestReplyProtocol}
  * @author aaron
  *
  */
 public class KeepAliveProtocol extends Protocol implements IRequestReplyProtocol {
-	private static Logger log = Logger.getLogger(KeepAliveProtocol.class.getName());
-	
+	private static final Logger log = Logger.getLogger(KeepAliveProtocol.class.getName());
+
 	/**
-	 * Name of this protocol. 
+	 * Name of this protocol.
 	 */
 	public static final String protocolName="KeepAliveProtocol";
-	
+
+	private static final long TIMER = 20 * 1000;
+	private static final long PADDING = 100; // 100 ms for padding time for in flight delays
+	private static final long NS2MS = 1000000;
+
+	private long lastRequest = 0;
+	private long lastReply = 0;
+	private volatile boolean protocolRunning = false;
+
+	private ICallback cb = null;
+
+	private final ICallback serverCallback = () -> {
+		if ((System.nanoTime() - lastRequest)/ NS2MS > (TIMER + PADDING)) {
+			log.severe("Client timeout occurred");
+			manager.endpointTimedOut(endpoint, this);
+			protocolRunning = false;
+			return;
+		}
+		scheduleCallback();
+
+	};
+
+	private final ICallback clientCallback = () -> {
+
+		if((System.nanoTime() - lastReply)/ NS2MS > (TIMER + PADDING)) {
+			log.severe("Sever timeout occurred");
+			manager.endpointTimedOut(endpoint, this);
+			protocolRunning = false;
+			return;
+		}
+
+		try {
+			sendRequest(new KeepAliveRequest());
+			scheduleCallback();
+		} catch (EndpointUnavailable endpointUnavailable) {
+			manager.endpointTimedOut(endpoint, this);
+			protocolRunning = false;
+		}
+
+	};
+
 	/**
 	 * Initialise the protocol with an endopint and a manager.
 	 * @param endpoint
@@ -54,7 +95,10 @@ public class KeepAliveProtocol extends Protocol implements IRequestReplyProtocol
 	public KeepAliveProtocol(Endpoint endpoint, Manager manager) {
 		super(endpoint,manager);
 	}
-	
+
+	private void scheduleCallback() {
+		Utils.getInstance().setTimeout(cb, TIMER);
+	}
 	/**
 	 * @return the name of the protocol
 	 */
@@ -64,74 +108,77 @@ public class KeepAliveProtocol extends Protocol implements IRequestReplyProtocol
 	}
 
 	/**
-	 * 
+	 *
 	 */
 	@Override
 	public void stopProtocol() {
-		
+		if(protocolRunning) {
+			log.severe("Protocol is already running");
+		}
 	}
-	
+
 	/*
 	 * Interface methods
 	 */
-	
+
 	/**
-	 * 
+	 *
 	 */
 	public void startAsServer() {
-		
+		protocolRunning = true;
+		cb = serverCallback;
+		scheduleCallback();
+		lastRequest  = System.nanoTime();
 	}
-	
+
 	/**
-	 * 
-	 */
-	public void checkClientTimeout() {
-		
-	}
-	
-	/**
-	 * 
+	 *
 	 */
 	public void startAsClient() throws EndpointUnavailable {
-		
-	}
-
-	/**
-	 * 
-	 * @param msg
-	 */
-	@Override
-	public void sendRequest(Message msg) throws EndpointUnavailable {
-		
-	}
-
-	/**
-	 * 
-	 * @param msg
-	 */
-	@Override
-	public void receiveReply(Message msg) {
-		
+		protocolRunning = true;
+		cb = clientCallback;
+		sendRequest(new KeepAliveRequest());
+		scheduleCallback();
+		lastReply = System.nanoTime();
 	}
 
 	/**
 	 *
 	 * @param msg
-	 * @throws EndpointUnavailable 
 	 */
 	@Override
-	public void receiveRequest(Message msg) throws EndpointUnavailable {
-		
+	public void sendRequest(Message msg) throws EndpointUnavailable {
+		endpoint.send(msg);
 	}
 
 	/**
-	 * 
+	 *
+	 * @param msg
+	 */
+	@Override
+	public void receiveReply(Message msg) {
+		lastReply = System.nanoTime();
+	}
+
+	/**
+	 *
+	 * @param msg
+	 * @throws EndpointUnavailable
+	 */
+	@Override
+	public void receiveRequest(Message msg) throws EndpointUnavailable {
+		lastRequest = System.nanoTime();
+		sendReply(new KeepAliveReply());
+	}
+
+	/**
+	 *
 	 * @param msg
 	 */
 	@Override
 	public void sendReply(Message msg) throws EndpointUnavailable {
-		
+		endpoint.send(msg);
 	}
-	
-	
+
+
 }
