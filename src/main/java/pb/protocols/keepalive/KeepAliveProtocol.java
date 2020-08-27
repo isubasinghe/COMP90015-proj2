@@ -2,15 +2,14 @@ package pb.protocols.keepalive;
 
 import java.time.Instant;
 import java.util.logging.Logger;
-
 import pb.Endpoint;
 import pb.EndpointUnavailable;
 import pb.Manager;
 import pb.Utils;
 import pb.protocols.ICallback;
+import pb.protocols.IRequestReplyProtocol;
 import pb.protocols.Message;
 import pb.protocols.Protocol;
-import pb.protocols.IRequestReplyProtocol;
 
 /**
  * Provides all of the protocol logic for both client and server to undertake
@@ -39,146 +38,143 @@ import pb.protocols.IRequestReplyProtocol;
  * @author aaron
  *
  */
-public class KeepAliveProtocol extends Protocol implements IRequestReplyProtocol {
-	private static final Logger log = Logger.getLogger(KeepAliveProtocol.class.getName());
+public class KeepAliveProtocol
+    extends Protocol implements IRequestReplyProtocol {
+  private static final Logger log =
+      Logger.getLogger(KeepAliveProtocol.class.getName());
 
-	/**
-	 * Name of this protocol.
-	 */
-	public static final String protocolName="KeepAliveProtocol";
+  /**
+   * Name of this protocol.
+   */
+  public static final String protocolName = "KeepAliveProtocol";
 
-	private static final long TIMER = 20 * 1000;
-	private static final long PADDING = 100; // 100 ms for padding time for in flight delays
-	private static final long NS2MS = 1000000;
+  private static final long TIMER = 20 * 1000;
+  private static final long PADDING =
+      100; // 100 ms for padding time for in flight delays
+  private static final long NS2MS = 1000000;
 
-	private long lastRequest = 0;
-	private long lastReply = 0;
-	private volatile boolean protocolRunning = false;
+  private long lastRequest = 0;
+  private long lastReply = 0;
+  private volatile boolean protocolRunning = false;
 
-	private ICallback cb = null;
+  private ICallback cb = null;
 
-	private final ICallback serverCallback = () -> {
-		if ((System.nanoTime() - lastRequest)/ NS2MS > (TIMER + PADDING)) {
-			log.severe("Client timeout occurred");
-			manager.endpointTimedOut(endpoint, this);
-			protocolRunning = false;
-			return;
-		}
-		scheduleCallback();
+  private final ICallback serverCallback = () -> {
+    if ((System.nanoTime() - lastRequest) / NS2MS > (TIMER + PADDING)) {
+      log.severe("Client timeout occurred");
+      manager.endpointTimedOut(endpoint, this);
+      protocolRunning = false;
+      return;
+    }
+    scheduleCallback();
+  };
 
-	};
+  private final ICallback clientCallback = () -> {
 
-	private final ICallback clientCallback = () -> {
+    if ((System.nanoTime() - lastReply) / NS2MS > (TIMER + PADDING)) {
+      log.severe("Sever timeout occurred");
+      manager.endpointTimedOut(endpoint, this);
+      protocolRunning = false;
+      return;
+    }
 
-		if((System.nanoTime() - lastReply)/ NS2MS > (TIMER + PADDING)) {
-			log.severe("Sever timeout occurred");
-			manager.endpointTimedOut(endpoint, this);
-			protocolRunning = false;
-			return;
-		}
+    try {
+      sendRequest(new KeepAliveRequest());
+      scheduleCallback();
+    } catch (EndpointUnavailable endpointUnavailable) {
+      manager.endpointTimedOut(endpoint, this);
+      protocolRunning = false;
+    }
+  };
 
-		try {
-			sendRequest(new KeepAliveRequest());
-			scheduleCallback();
-		} catch (EndpointUnavailable endpointUnavailable) {
-			manager.endpointTimedOut(endpoint, this);
-			protocolRunning = false;
-		}
+  /**
+   * Initialise the protocol with an endopint and a manager.
+   * @param endpoint
+   * @param manager
+   */
+  public KeepAliveProtocol(Endpoint endpoint, Manager manager) {
+    super(endpoint, manager);
+  }
 
-	};
+  private void scheduleCallback() { Utils.getInstance().setTimeout(cb, TIMER); }
+  /**
+   * @return the name of the protocol
+   */
+  @Override
+  public String getProtocolName() {
+    return protocolName;
+  }
 
-	/**
-	 * Initialise the protocol with an endopint and a manager.
-	 * @param endpoint
-	 * @param manager
-	 */
-	public KeepAliveProtocol(Endpoint endpoint, Manager manager) {
-		super(endpoint,manager);
-	}
+  /**
+   *
+   */
+  @Override
+  public void stopProtocol() {
+    if (protocolRunning) {
+      log.severe("Protocol is already running");
+    }
+  }
 
-	private void scheduleCallback() {
-		Utils.getInstance().setTimeout(cb, TIMER);
-	}
-	/**
-	 * @return the name of the protocol
-	 */
-	@Override
-	public String getProtocolName() {
-		return protocolName;
-	}
+  /*
+   * Interface methods
+   */
 
-	/**
-	 *
-	 */
-	@Override
-	public void stopProtocol() {
-		if(protocolRunning) {
-			log.severe("Protocol is already running");
-		}
-	}
+  /**
+   *
+   */
+  public void startAsServer() {
+    protocolRunning = true;
+    cb = serverCallback;
+    scheduleCallback();
+    lastRequest = System.nanoTime();
+  }
 
-	/*
-	 * Interface methods
-	 */
+  /**
+   *
+   */
+  public void startAsClient() throws EndpointUnavailable {
+    protocolRunning = true;
+    cb = clientCallback;
+    sendRequest(new KeepAliveRequest());
+    scheduleCallback();
+    lastReply = System.nanoTime();
+  }
 
-	/**
-	 *
-	 */
-	public void startAsServer() {
-		protocolRunning = true;
-		cb = serverCallback;
-		scheduleCallback();
-		lastRequest  = System.nanoTime();
-	}
+  /**
+   *
+   * @param msg
+   */
+  @Override
+  public void sendRequest(Message msg) throws EndpointUnavailable {
+    endpoint.send(msg);
+  }
 
-	/**
-	 *
-	 */
-	public void startAsClient() throws EndpointUnavailable {
-		protocolRunning = true;
-		cb = clientCallback;
-		sendRequest(new KeepAliveRequest());
-		scheduleCallback();
-		lastReply = System.nanoTime();
-	}
+  /**
+   *
+   * @param msg
+   */
+  @Override
+  public void receiveReply(Message msg) {
+    lastReply = System.nanoTime();
+  }
 
-	/**
-	 *
-	 * @param msg
-	 */
-	@Override
-	public void sendRequest(Message msg) throws EndpointUnavailable {
-		endpoint.send(msg);
-	}
+  /**
+   *
+   * @param msg
+   * @throws EndpointUnavailable
+   */
+  @Override
+  public void receiveRequest(Message msg) throws EndpointUnavailable {
+    lastRequest = System.nanoTime();
+    sendReply(new KeepAliveReply());
+  }
 
-	/**
-	 *
-	 * @param msg
-	 */
-	@Override
-	public void receiveReply(Message msg) {
-		lastReply = System.nanoTime();
-	}
-
-	/**
-	 *
-	 * @param msg
-	 * @throws EndpointUnavailable
-	 */
-	@Override
-	public void receiveRequest(Message msg) throws EndpointUnavailable {
-		lastRequest = System.nanoTime();
-		sendReply(new KeepAliveReply());
-	}
-
-	/**
-	 *
-	 * @param msg
-	 */
-	@Override
-	public void sendReply(Message msg) throws EndpointUnavailable {
-		endpoint.send(msg);
-	}
-
-
+  /**
+   *
+   * @param msg
+   */
+  @Override
+  public void sendReply(Message msg) throws EndpointUnavailable {
+    endpoint.send(msg);
+  }
 }
